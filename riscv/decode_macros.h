@@ -15,7 +15,8 @@
 #define STATE (*p->get_state())
 #define FLEN (p->get_flen())
 #define CHECK_REG(reg) ((void) 0)
-#define READ_REG(reg) (CHECK_REG(reg), STATE.XPR[reg])
+#define READ_REG(reg) (insn.decode_rd_xpr(reg), CHECK_REG(reg), STATE.XPR[reg])
+#define READ_REG_ORG(reg) (CHECK_REG(reg), STATE.XPR[reg])
 #define READ_FREG(reg) STATE.FPR[reg]
 #define RD READ_REG(insn.rd())
 #define RS1 READ_REG(insn.rs1())
@@ -30,6 +31,7 @@
  * 4 : csr
  */
 #define WRITE_REG(reg, value) ({ \
+    insn.decode_wr_xpr(reg);\
     reg_t wdata = (value); /* value may have side effects */ \
     if (DECODE_MACRO_USAGE_LOGGED) STATE.log_reg_write[(reg) << 4] = {wdata, 0}; \
     CHECK_REG(reg); \

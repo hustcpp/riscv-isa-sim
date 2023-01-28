@@ -85,6 +85,8 @@ static void help(int exit_code = 1)
   fprintf(stderr, "  --dm-no-halt-groups   Debug module won't support halt groups\n");
   fprintf(stderr, "  --dm-no-impebreak     Debug module won't support implicit ebreak in program buffer\n");
   fprintf(stderr, "  --blocksz=<size>      Cache block size (B) for CMO operations(powers of 2) [default 64]\n");
+  fprintf(stderr, "  --pf_start_pc=<pc>    profile start pc\n");
+  fprintf(stderr, "  --pf_end_pc=<pc>      profile end pc\n");
 
   exit(exit_code);
 }
@@ -415,6 +417,8 @@ int main(int argc, char** argv)
   parser.option('H', 0, 0, [&](const char UNUSED *s){halted = true;});
   parser.option(0, "rbb-port", 1, [&](const char* s){use_rbb = true; rbb_port = atoul_safe(s);});
   parser.option(0, "pc", 1, [&](const char* s){cfg.start_pc = strtoull(s, 0, 0);});
+  parser.option(0, "pf_start_pc", 1, [&](const char* s){cfg.pf_start_pc = strtoull(s, 0, 0);});
+  parser.option(0, "pf_end_pc", 1, [&](const char* s){cfg.pf_end_pc = strtoull(s, 0, 0);});
   parser.option(0, "hartids", 1, [&](const char* s){
     cfg.hartids = parse_hartids(s);
     cfg.explicit_hartids = true;

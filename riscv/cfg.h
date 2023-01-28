@@ -101,6 +101,8 @@ public:
   cfg_arg_t<std::vector<int>>        hartids;
   bool                               explicit_hartids;
   cfg_arg_t<bool>                    real_time_clint;
+  std::optional<reg_t>               pf_start_pc;
+  std::optional<reg_t>               pf_end_pc;
 
   size_t nprocs() const { return hartids().size(); }
 };

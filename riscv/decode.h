@@ -73,12 +73,26 @@ const int NCSR = 4096;
 #define MAX_INSN_LENGTH 8
 #define PC_ALIGN 2
 
+#define FD_RD_NUM 4
+#define FD_WR_NUM 2
+
 #define Sn(n) ((n) < 2 ? X_S0 + (n) : X_Sn + (n))
 
 typedef uint64_t insn_bits_t;
 class insn_t
 {
 public:
+  uint8_t xpr_rd_num;
+  uint8_t xpr_wr_num;
+  uint8_t xpr_rd[FD_RD_NUM];
+  uint8_t xpr_wr[FD_WR_NUM];
+  uint8_t is_cond_br;
+  uint8_t is_cond_br_taken;
+  uint8_t is_uncond_jmp;
+  void decode_init();
+  void decode_rd_xpr(uint64_t reg);
+  void decode_wr_xpr(uint64_t reg);
+
   insn_t() = default;
   insn_t(insn_bits_t bits) : b(bits) {}
   insn_bits_t bits() { return b; }

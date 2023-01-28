@@ -28,6 +28,92 @@
 #undef STATE
 #define STATE state
 
+#define XP_LANES            4
+#define XP_LANE_DP_WID      2
+#define XP_MAX_DISP         (XP_LANES*XP_LANE_DP_WID)
+#define XP_LANE_RENAME_WID  6
+#define DISP_ALLOC_BUF_WID  1
+
+typedef struct xp_disp_pack{
+    uint8_t reg_rd_cnt[32];
+    uint8_t reg_wr_cnt[32];
+    uint8_t dp_cnt[XP_LANES];
+    uint8_t rename_cnt[XP_LANES];
+    void clear(){
+        for (int i = 0; i < XP_LANES; i++) {
+            dp_cnt[i]     = 0;
+            rename_cnt[i] = 0;
+        }
+        for (int i = 0; i < 32; i++) {
+            reg_rd_cnt[i]     = 0;
+            reg_wr_cnt[i]     = 0;
+        }
+    }
+    xp_disp_pack() {
+        clear();
+    };
+} xp_disp_pack_t;
+
+    uint8_t reg_map[32] = {
+        255,    // 0
+        0,      // 1
+        1,      // 2
+        0,      // 3
+        1,      // 4
+        2,      // 5
+        3,      // 6
+        0,      // 7
+        2,      // 8
+        3,      // 9
+        1,      // 10
+        0,      // 11
+        3,      // 12
+        0,      // 13
+        2,      // 14
+        3,      // 15
+        2,      // 16
+        0,      // 17
+        1,      // 18
+        1,      // 19
+        3,      // 20
+        2,      // 21
+        0,      // 22
+        0,      // 23
+        3,      // 24
+        0,      // 25
+        1,      // 26
+        2,      // 27
+        3,      // 28
+        0,      // 29
+        1,      // 30
+        2       // 31
+    };
+
+struct proc_mods_t{
+    xp_disp_pack_t xp_disp_alloc_buf[DISP_ALLOC_BUF_WID];
+    uint64_t xp_cnt[XP_MAX_DISP];
+    uint64_t total_insts;
+    uint64_t override_insts;
+    uint64_t reg_rd[32];
+    uint64_t reg_wr[32];
+    uint64_t ovr_wr[32];
+    uint8_t  pf_enabled;
+    const cfg_t* cfg;
+    proc_mods_t() {
+        total_insts = 0;
+        override_insts = 0;
+        pf_enabled = 0;
+        for (int i = 0; i < 32; i++) {
+            reg_rd[i] = 0;
+            reg_wr[i] = 0;
+            ovr_wr[i] = 0;
+        };
+        for (int i = 0; i < XP_MAX_DISP; i++) {
+            xp_cnt[i] = 0;
+        }
+    };
+};
+
 processor_t::processor_t(const isa_parser_t *isa, const cfg_t *cfg,
                          simif_t* sim, uint32_t id, bool halt_on_reset,
                          FILE* log_file, std::ostream& sout_)
@@ -67,8 +153,12 @@ processor_t::processor_t(const isa_parser_t *isa, const cfg_t *cfg,
   set_impl(IMPL_MMU_ASID, true);
   set_impl(IMPL_MMU_VMID, true);
 
+  mods = new proc_mods_t();
+  mods->cfg = cfg;
   reset();
 }
+
+void display_mods(proc_mods_t* mods);
 
 processor_t::~processor_t()
 {
@@ -82,7 +172,10 @@ processor_t::~processor_t()
     for (auto it : ordered_histo)
       fprintf(stderr, "%0" PRIx64 " %" PRIu64 "\n", it.first, it.second);
   }
+    
+  display_mods(mods);
 
+  delete mods;
   delete mmu;
   delete disassembler;
 }
@@ -1126,4 +1219,227 @@ void processor_t::trigger_updated(const std::vector<triggers::trigger_t *> &trig
       mmu->check_triggers_store = true;
     }
   }
+}
+
+typedef struct xp_disp_tmp{
+    uint8_t xpr_rd_lane[FD_RD_NUM];
+    uint8_t xpr_wr_lane[FD_WR_NUM];
+    void clear(){
+        for (int i = 0; i < FD_RD_NUM; i++) {
+            xpr_rd_lane[i]     = 0;
+        }
+        for (int i = 0; i < FD_WR_NUM; i++) {
+            xpr_wr_lane[i]     = 0;
+        }
+    }
+    xp_disp_tmp() {
+        clear();
+    };
+} xp_disp_tmp_t;
+
+uint8_t disp_alloc_xp_try(xp_disp_pack_t& pack, insn_t& insn, uint8_t lane, xp_disp_tmp_t& t){
+    // does this lane reach max dispatch width?
+    if (pack.dp_cnt[lane] >= XP_LANE_DP_WID)
+        return 0;
+    // each lane has enough rename bandwidth
+    uint8_t rename_cnt[XP_LANES];
+    for (int i = 0; i < XP_LANES; i++)
+        rename_cnt[i] = pack.rename_cnt[i];
+    for (int i = 0; i < insn.xpr_rd_num; i++) {
+        // the reg is written in current pack before, no need to lookup
+        if (pack.reg_wr_cnt[insn.xpr_rd[i]] > 0)
+            continue;
+        // each rd reg has rename port
+        if (rename_cnt[t.xpr_rd_lane[i]] >= XP_LANE_RENAME_WID)
+            return 0;
+        rename_cnt[t.xpr_rd_lane[i]]++;
+    };
+    // alloc success
+    for (int i = 0; i < XP_LANES; i++)
+        pack.rename_cnt[i] = rename_cnt[i];
+    pack.dp_cnt[lane]++;
+    for (int i = 0; i < insn.xpr_wr_num; i++) {
+        pack.reg_wr_cnt[insn.xpr_wr[i]]++;
+        pack.reg_rd_cnt[insn.xpr_wr[i]] = 0;
+    }
+    return 1;
+}
+
+
+uint8_t disp_alloc_xp(xp_disp_pack_t& pack, insn_t& insn){
+    xp_disp_tmp_t t;
+    for (int i = 0; i < insn.xpr_rd_num; i++)
+        t.xpr_rd_lane[i] = reg_map[insn.xpr_rd[i]];
+    for (int i = 0; i < insn.xpr_wr_num; i++)
+        t.xpr_wr_lane[i] = reg_map[insn.xpr_wr[i]];
+    uint8_t candi_lane = 255; 
+    // first try lane with override
+    if (insn.xpr_wr_num > 0)
+        for (int i = 0; i < insn.xpr_rd_num; i++){
+            if (t.xpr_rd_lane[i] == t.xpr_wr_lane[0]){
+                candi_lane = t.xpr_wr_lane[0];
+            }
+        }
+    if (candi_lane != 255)
+        if (disp_alloc_xp_try(pack, insn, candi_lane, t))
+            return 1;
+    // 2nd try read with write from same pack
+    for (int i = 0; i < insn.xpr_rd_num; i++){
+        if ((pack.reg_wr_cnt[insn.xpr_rd[i]] != 0) && (pack.reg_rd_cnt[insn.xpr_rd[i]] == 0)) {
+            candi_lane = t.xpr_rd_lane[i];
+            if (disp_alloc_xp_try(pack, insn, candi_lane, t))
+                return 1;
+        }
+    }
+    // try all other read lanes
+    for (int i = 0; i < insn.xpr_rd_num; i++){
+        candi_lane = t.xpr_rd_lane[i];
+        if (disp_alloc_xp_try(pack, insn, candi_lane, t))
+            return 1;
+    }
+    // try all lanes
+    for (int i = 0; i < XP_LANES; i++){
+        candi_lane = i;
+        if (disp_alloc_xp_try(pack, insn, candi_lane, t))
+            return 1;
+    }
+    return 0;
+}
+
+void execute_mods(processor_t *p, insn_bits_t opc, insn_t insn, reg_t pc) {
+    if (pc == p->mods->cfg->pf_start_pc)
+        p->mods->pf_enabled = 1;
+    else if (pc == p->mods->cfg->pf_end_pc) {
+        for (int j = 0; j < DISP_ALLOC_BUF_WID; j++) {
+            uint8_t total_disp = 0;
+            for (int i = 0; i < XP_LANES; i++)
+                total_disp += p->mods->xp_disp_alloc_buf[j].dp_cnt[i];
+            if (total_disp > XP_MAX_DISP)
+                std::cout << "error allocate 3\n";
+            p->mods->xp_cnt[total_disp-1]++;
+            p->mods->xp_disp_alloc_buf[j].clear();
+        }
+        p->mods->pf_enabled = 0;
+    }
+    if (p->mods->pf_enabled == 0)
+        return;
+
+    // model the dispatch allocation for integer pipelines
+    uint8_t flag = 0;
+    for (int i =0; i < DISP_ALLOC_BUF_WID; i++) {
+        flag = disp_alloc_xp(p->mods->xp_disp_alloc_buf[i], insn);
+        if (flag != 0)
+            break;
+    }
+    if ((flag == 0) || (insn.is_cond_br_taken == 1)) {
+        uint8_t total_disp = 0;
+        for (int i = 0; i < XP_LANES; i++)
+            total_disp += p->mods->xp_disp_alloc_buf[0].dp_cnt[i];
+        if (total_disp == 0)
+            std::cout << "error allocate 2\n";
+        if (total_disp > XP_MAX_DISP)
+            std::cout << "error allocate 3\n";
+        p->mods->xp_cnt[total_disp-1]++;
+
+        std::string info = std::string("pack alloc: \n");
+        for (int i =0; i < XP_LANES; i++) {
+            info += "lane"+ std::to_string(i) + ": "+std::to_string(p->mods->xp_disp_alloc_buf[0].dp_cnt[i])+"; ";
+        }
+        std::cout << info << "\n==========================================" << std::endl;
+        // allocate a new buf
+        for (int i =1; i < DISP_ALLOC_BUF_WID; i++) {
+            p->mods->xp_disp_alloc_buf[i-1] = p->mods->xp_disp_alloc_buf[i];
+        }
+        p->mods->xp_disp_alloc_buf[DISP_ALLOC_BUF_WID-1].clear();
+    }
+
+    if (flag == 0) {
+        flag = disp_alloc_xp(p->mods->xp_disp_alloc_buf[DISP_ALLOC_BUF_WID-1], insn);
+        if (flag == 0)
+            std::cout << "error allocate 1\n";
+    }
+
+    std::string info = std::string("rd: ");
+    for (int i = 0; i < insn.xpr_rd_num; i++){
+        info += std::to_string(insn.xpr_rd[i]) + " lane " + std::to_string(reg_map[insn.xpr_rd[i]]) + "| ";
+        p->mods->reg_rd[insn.xpr_rd[i]]++;
+    }
+    info += "; wr: ";
+    for (int i = 0; i < insn.xpr_wr_num; i++){
+        info += std::to_string(insn.xpr_wr[i]) + " lane " + std::to_string(reg_map[insn.xpr_wr[i]]) + "| ";
+        p->mods->reg_wr[insn.xpr_wr[i]]++;
+    }
+    if (insn.xpr_wr_num > 0)
+        for (int i = 0; i < insn.xpr_rd_num; i++){
+            if (insn.xpr_rd[i] == insn.xpr_wr[0]){
+                p->mods->override_insts++;
+                p->mods->ovr_wr[insn.xpr_wr[0]]++;
+                break;
+            }
+        }
+    p->mods->total_insts++;
+    p->disasm(insn);
+    std::cout << info << std::endl;
+}
+
+
+
+  void insn_t::decode_init() {
+    xpr_rd_num = 0;
+    xpr_wr_num = 0;
+    for (auto i : xpr_rd)
+        i = 0;
+    for (auto i : xpr_wr)
+        i = 0;
+  };
+  void insn_t::decode_rd_xpr(uint64_t reg) {
+    if (reg == 0)
+        return;
+    if (xpr_rd_num < FD_RD_NUM) {
+        uint8_t reg_val = (uint8_t)reg;
+        for (int i = 0; i < xpr_rd_num; i++)
+            if (xpr_rd[i] == reg_val)
+                return;
+        xpr_rd[xpr_rd_num] = reg_val;
+        xpr_rd_num++;
+    }
+  };
+  void insn_t::decode_wr_xpr(uint64_t reg) {
+    if (reg == 0)
+        return;
+    if (xpr_wr_num < FD_WR_NUM) {
+        uint8_t reg_val = (uint8_t)reg;
+        for (int i = 0; i < xpr_wr_num; i++)
+            if (xpr_wr[i] == reg_val)
+                return;
+        xpr_wr[xpr_wr_num] = reg_val;
+        xpr_wr_num++;
+    }
+  };
+
+void display_mods(proc_mods_t* mods) {
+    std::string info = std::string("total insts:") + std::to_string(mods->total_insts) + "\n";
+    info += std::string("rd override rs insts:") + std::to_string(mods->override_insts) + "\n";
+    uint64_t tmp = 0;
+    for (int i = 0; i < 32; i++)
+        tmp += mods->reg_rd[i];
+    info += "total rd:\n";
+    for (int i = 0; i < 32; i++)
+        info += "r" + std::to_string(i) + " " + std::to_string(mods->reg_rd[i]) + "\n";
+    info += "total wr:\n";
+    for (int i = 0; i < 32; i++)
+        tmp += mods->reg_wr[i];
+    for (int i = 0; i < 32; i++)
+        info += "r" + std::to_string(i) + " " + std::to_string(mods->reg_wr[i]) + "\n";
+    info += "overrides:\n";
+    for (int i = 0; i < 32; i++)
+        info += "r" + std::to_string(i) + " " + std::to_string(mods->ovr_wr[i]) + "\n";
+    info += "fx packs:\n";
+    uint64_t total_xp_cnt = 0;
+    for (int i = 0; i < XP_MAX_DISP; i++) {
+        info += "has " + std::to_string(i+1) + " insts: " + std::to_string(mods->xp_cnt[i]) + "\n";
+        total_xp_cnt += mods->xp_cnt[i];
+    }
+    info += "total fx packs: " + std::to_string(total_xp_cnt) + "\n";
+    std::cout << info << std::endl;
 }

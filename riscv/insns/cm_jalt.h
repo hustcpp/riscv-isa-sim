@@ -16,6 +16,7 @@ case 0:  // jump table mode
     WRITE_REG(1, npc);
 
   set_pc(target & ~reg_t(1));
+  insn.is_uncond_jmp = 1;
   break;
 default:
   require(0);

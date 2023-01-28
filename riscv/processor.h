@@ -175,10 +175,13 @@ struct state_t
   int last_inst_flen;
 };
 
+struct proc_mods_t;
+
 // this class represents one processor in a RISC-V machine.
 class processor_t : public abstract_device_t
 {
 public:
+  proc_mods_t* mods;
   processor_t(const isa_parser_t *isa, const cfg_t* cfg,
               simif_t* sim, uint32_t id, bool halt_on_reset,
               FILE *log_file, std::ostream& sout_); // because of command line option --log and -s we need both
@@ -283,6 +286,7 @@ public:
   void set_mmu_capability(int cap);
 
   const char* get_symbol(uint64_t addr);
+  void disasm(insn_t insn); // disassemble and print an instruction
 
 private:
   const isa_parser_t * const isa;
@@ -313,7 +317,6 @@ private:
   void take_interrupt(reg_t mask); // take first enabled interrupt in mask
   void take_trap(trap_t& t, reg_t epc); // take an exception
   void take_trigger_action(triggers::action_t action, reg_t breakpoint_tval, reg_t epc);
-  void disasm(insn_t insn); // disassemble and print an instruction
   int paddr_bits();
 
   void enter_debug_mode(uint8_t cause);

@@ -7,6 +7,7 @@ if (STATE.v) {
   require_privilege(get_field(STATE.mstatus->read(), MSTATUS_TSR) ? PRV_M : PRV_S);
 }
 reg_t next_pc = p->get_state()->sepc->read();
+insn.is_uncond_jmp = 1;
 set_pc_and_serialize(next_pc);
 reg_t s = STATE.sstatus->read();
 reg_t prev_prv = get_field(s, MSTATUS_SPP);
