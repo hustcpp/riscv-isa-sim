@@ -1,5 +1,6 @@
 require(STATE.debug_mode);
 insn.is_uncond_jmp = 1;
+insn.is_end_pack = 1;
 set_pc_and_serialize(STATE.dpc->read());
 p->set_privilege(STATE.dcsr->prv);
 if (STATE.prv < PRV_M)

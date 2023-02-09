@@ -31,15 +31,20 @@
 #define XP_LANES            4
 #define XP_LANE_DP_WID      2
 #define XP_MAX_DISP         (XP_LANES*XP_LANE_DP_WID)
+#define XP_MAX_BRCC         2
 #define XP_LANE_RENAME_WID  6
 #define DISP_ALLOC_BUF_WID  1
+#define BRCC_SEC_CNTS       64
+#define BRCC_NT_SEC_CNTS    64
 
 typedef struct xp_disp_pack{
     uint8_t reg_rd_cnt[32];
     uint8_t reg_wr_cnt[32];
     uint8_t dp_cnt[XP_LANES];
     uint8_t rename_cnt[XP_LANES];
+    uint32_t pack_brcc_cnt;
     void clear(){
+        pack_brcc_cnt = 0;
         for (int i = 0; i < XP_LANES; i++) {
             dp_cnt[i]     = 0;
             rename_cnt[i] = 0;
@@ -92,6 +97,10 @@ typedef struct xp_disp_pack{
 struct proc_mods_t{
     xp_disp_pack_t xp_disp_alloc_buf[DISP_ALLOC_BUF_WID];
     uint64_t xp_cnt[XP_MAX_DISP];
+    uint32_t brcc_cnt;
+    uint32_t brcc_nt_cnt;
+    uint32_t brcc_cnts[BRCC_SEC_CNTS];
+    uint32_t brcc_nt_cnts[BRCC_NT_SEC_CNTS];
     uint64_t total_insts;
     uint64_t override_insts;
     uint64_t reg_rd[32];
@@ -111,6 +120,14 @@ struct proc_mods_t{
         for (int i = 0; i < XP_MAX_DISP; i++) {
             xp_cnt[i] = 0;
         }
+        for (int i = 0; i < BRCC_SEC_CNTS; i++) {
+            brcc_cnts[i] = 0;
+        }
+        for (int i = 0; i < BRCC_NT_SEC_CNTS; i++) {
+            brcc_nt_cnts[i] = 0;
+        }
+        brcc_cnt = 0;
+        brcc_nt_cnt = 0;
     };
 };
 
@@ -1241,6 +1258,9 @@ uint8_t disp_alloc_xp_try(xp_disp_pack_t& pack, insn_t& insn, uint8_t lane, xp_d
     // does this lane reach max dispatch width?
     if (pack.dp_cnt[lane] >= XP_LANE_DP_WID)
         return 0;
+    // brcc reach max
+    if (insn.is_cond_br == 1 && pack.pack_brcc_cnt >= XP_MAX_BRCC)
+        return 0;
     // each lane has enough rename bandwidth
     uint8_t rename_cnt[XP_LANES];
     for (int i = 0; i < XP_LANES; i++)
@@ -1262,6 +1282,8 @@ uint8_t disp_alloc_xp_try(xp_disp_pack_t& pack, insn_t& insn, uint8_t lane, xp_d
         pack.reg_wr_cnt[insn.xpr_wr[i]]++;
         pack.reg_rd_cnt[insn.xpr_wr[i]] = 0;
     }
+    if (insn.is_cond_br == 1)
+        pack.pack_brcc_cnt++;
     return 1;
 }
 
@@ -1331,7 +1353,23 @@ void execute_mods(processor_t *p, insn_bits_t opc, insn_t insn, reg_t pc) {
         if (flag != 0)
             break;
     }
-    if ((flag == 0) || (insn.is_cond_br_taken == 1)) {
+    p->mods->brcc_nt_cnt++;
+    p->mods->brcc_cnt++;
+    if (insn.is_cond_br_taken == 1){
+        if (p->mods->brcc_nt_cnt > BRCC_NT_SEC_CNTS)
+            p->mods->brcc_nt_cnts[BRCC_NT_SEC_CNTS-1]++;
+        else
+            p->mods->brcc_nt_cnts[p->mods->brcc_nt_cnt-1]++;
+        p->mods->brcc_nt_cnt = 0;
+    }
+    if (insn.is_cond_br == 1){
+        if (p->mods->brcc_cnt > BRCC_SEC_CNTS)
+            p->mods->brcc_cnts[BRCC_SEC_CNTS-1]++;
+        else
+            p->mods->brcc_cnts[p->mods->brcc_cnt-1]++;
+        p->mods->brcc_cnt = 0;
+    }
+    if ((flag == 0) || (insn.is_end_pack == 1)) {
         uint8_t total_disp = 0;
         for (int i = 0; i < XP_LANES; i++)
             total_disp += p->mods->xp_disp_alloc_buf[0].dp_cnt[i];
@@ -1387,6 +1425,10 @@ void execute_mods(processor_t *p, insn_bits_t opc, insn_t insn, reg_t pc) {
   void insn_t::decode_init() {
     xpr_rd_num = 0;
     xpr_wr_num = 0;
+    is_cond_br = 0;
+    is_end_pack = 0;
+    is_cond_br_taken = 0;
+    is_uncond_jmp = 0;
     for (auto i : xpr_rd)
         i = 0;
     for (auto i : xpr_wr)
@@ -1441,5 +1483,14 @@ void display_mods(proc_mods_t* mods) {
         total_xp_cnt += mods->xp_cnt[i];
     }
     info += "total fx packs: " + std::to_string(total_xp_cnt) + "\n";
+    info += "\nnot taken trace lengths:\n";
+    for (int i = 0; i < BRCC_NT_SEC_CNTS; i++) {
+        info += "has " + std::to_string(i+1) + " insts: " + std::to_string(mods->brcc_nt_cnts[i]) + "\n";
+    }
+    info += "\nany brcc trace lengths:\n";
+    for (int i = 0; i < BRCC_SEC_CNTS; i++) {
+        info += "has " + std::to_string(i+1) + " insts: " + std::to_string(mods->brcc_cnts[i]) + "\n";
+    }
+
     std::cout << info << std::endl;
 }

@@ -87,6 +87,7 @@ public:
   uint8_t xpr_rd[FD_RD_NUM];
   uint8_t xpr_wr[FD_WR_NUM];
   uint8_t is_cond_br;
+  uint8_t is_end_pack;
   uint8_t is_cond_br_taken;
   uint8_t is_uncond_jmp;
   void decode_init();

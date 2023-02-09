@@ -8,6 +8,7 @@ if (STATE.v) {
 }
 reg_t next_pc = p->get_state()->sepc->read();
 insn.is_uncond_jmp = 1;
+insn.is_end_pack = 1;
 set_pc_and_serialize(next_pc);
 reg_t s = STATE.sstatus->read();
 reg_t prev_prv = get_field(s, MSTATUS_SPP);
